@@ -46,6 +46,7 @@ export class FX {
         blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       }));
       s.userData.additive = additive;
+      s.layers.set(1); // not reflected
       this.pool.push(s);
       this.scene.add(s);
     }

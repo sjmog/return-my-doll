@@ -5,6 +5,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { Puppet } from "./puppet.js";
 import { COSTS } from "./combat.js";
 import { BossBrain } from "./boss.js";
+import { terrainHeight } from "./world.js";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const GRAV = 22;
@@ -78,7 +79,12 @@ export class Actor {
   physics(dt, { gravity = GRAV, flying = false } = {}) {
     const w = this.game.world;
     if (!flying || this.onGround) this.vel.y -= gravity * dt;
-    this.pos.addScaledVector(this.vel, dt);
+    // Water drags at the legs: wading slows you more the deeper it gets, swimming is slowest.
+    const drag = !this.waterDepth ? 1 : this.swimming ? 0.55 : Math.max(0.6, 1 - this.waterDepth * 0.45);
+    const fallSpeed = this.vel.y;
+    this.pos.x += this.vel.x * dt * drag;
+    this.pos.z += this.vel.z * dt * drag;
+    this.pos.y += this.vel.y * dt;
     w.collide(this.pos, this.radius);
     const g = w.groundAt(this.pos.x, this.pos.z, this.pos.y);
     const wasAir = !this.onGround;
@@ -90,8 +96,36 @@ export class Actor {
     } else {
       this.onGround = this.pos.y - g < 0.05;
     }
+    this.inWater(dt, g, fallSpeed);
     this.holder.position.copy(this.pos);
     this.holder.rotation.y = this.facing;
+  }
+
+  /** Wade through shallows, swim (float chest-deep) in deep water, splash on the way in, leave rings. */
+  inWater(dt, ground, fallSpeed) {
+    const game = this.game, w = game.world;
+    const surface = w.waterAt(this.pos.x, this.pos.z), depth = surface - ground;
+    const wasWet = this.waterDepth > 0;
+    if (depth < 0.08 || this.pos.y > surface + 0.1) { this.waterDepth = 0; this.swimming = false; return; }
+    this.waterDepth = depth;
+    if (!wasWet && fallSpeed < -4) {
+      w.addRipple(this.pos.x, this.pos.z, 1.6);
+      game.fx.burst(new THREE.Vector3(this.pos.x, surface, this.pos.z), "puff", 18, { color: "#e4f4ff", up: 5, speed: 2.6, life: 0.8, size: 0.32 });
+      if (this === game.active) game.sound.play("splash", { vol: 0.7, gap: 0.3 });
+    }
+    const swimDepth = this.id === "doll" ? 0.55 : 0.95;
+    this.swimming = depth > swimDepth;
+    if (this.swimming) {
+      const floatY = surface - swimDepth + Math.sin((game.t || 0) * 3 + this.pos.x) * 0.04;
+      if (this.pos.y < floatY) { this.pos.y = floatY; if (this.vel.y < 0) this.vel.y = 0; this.onGround = true; }
+    }
+    const speed = Math.hypot(this.vel.x, this.vel.z);
+    this.rippleTimer = (this.rippleTimer || 0) - dt;
+    if (this.rippleTimer <= 0 && (speed > 0.8 || this.swimming)) {
+      this.rippleTimer = this.swimming ? 0.5 : 0.38;
+      w.addRipple(this.pos.x, this.pos.z, speed > 0.8 ? 0.7 : 0.3);
+      if (this === game.active && speed > 0.8) game.sound.play("wade", { vol: 0.3, gap: 0.3 });
+    }
   }
 
   faceTowards(dx, dz, dt, rate = 12) {
@@ -846,15 +880,20 @@ export class Enemy {
     if (this.kind === "thornwisp") {
       this.pos.addScaledVector(this.vel, dt);
       g.world.collide(this.pos, this.radius);
-      this.pos.y = g.world.groundAt(this.pos.x, this.pos.z) + 1.8 + Math.sin(t * 2 + this.home.x) * 0.4;
+      this.pos.y = Math.max(g.world.groundAt(this.pos.x, this.pos.z), g.world.waterAt(this.pos.x, this.pos.z)) + 1.8 + Math.sin(t * 2 + this.home.x) * 0.4;
       this.holder.position.copy(this.pos);
       this.holder.rotation.y = this.facing;
       this.spikes.rotation.x += dt * 2; this.spikes.rotation.y += dt * 1.3;
       return;
     }
     this.vel.y -= GRAV * dt;
+    const px = this.pos.x, pz = this.pos.z;
     this.pos.addScaledVector(this.vel, dt);
     g.world.collide(this.pos, this.radius);
+    // Walking trees and knights stop at the water's edge (swimming away is a way out of a fight).
+    const wet = (x, z) => g.world.waterAt(x, z) - terrainHeight(x, z);
+    const d = wet(this.pos.x, this.pos.z);
+    if (d > 0.45 && d > wet(px, pz)) { this.pos.x = px; this.pos.z = pz; this.vel.x = this.vel.z = 0; }
     const gr = g.world.groundAt(this.pos.x, this.pos.z, this.pos.y);
     if (this.pos.y < gr) { this.pos.y = gr; this.vel.y = 0; }
     this.holder.position.copy(this.pos);

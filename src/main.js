@@ -1,7 +1,7 @@
 // Return My Doll: a watercolour open-world RPG starring the hand-painted Blender puppets.
 import * as THREE from "three";
 import { loadAssets } from "./assets.js";
-import { World, PLACES, terrainHeight, WORLD_R } from "./world.js";
+import { World, PLACES, terrainHeight, WORLD_R, WATER_Y } from "./world.js";
 import { Hero, Enemy, HEROES } from "./actors.js";
 import { FX } from "./fx.js";
 import { UI, Dialogue } from "./ui.js";
@@ -11,6 +11,7 @@ import { Sound } from "./sound.js";
 import { Combat } from "./combat.js";
 import { Destruct } from "./destruct.js";
 import { Post } from "./post.js";
+import { Reflection } from "./water.js";
 
 const $ = (s) => document.querySelector(s);
 
@@ -53,6 +54,7 @@ class Game {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
+    this.camera.layers.enable(1); // layer 1: things drawn on screen but left out of water reflections
     this.cam = { yaw: Math.PI * 0.85, pitch: 0.16, dist: 9, target: new THREE.Vector3() };
     this.keys = new Set();
     this.mouse = { left: false, right: false };
@@ -82,6 +84,13 @@ class Game {
     await loadAssets((u) => { $("#loadbar i").style.width = `${Math.round(u * 100)}%`; });
     this.world = new World(this.scene, { low: this.low });
     if (!this.low) this.post = new Post(this); // watercolour post-processing (graphics track)
+    if (!this.low) {
+      this.reflection = new Reflection(this.renderer);
+      const u = this.world.waterUniforms;
+      u.reflTex.value = this.reflection.target.texture;
+      u.reflMat.value = this.reflection.matrix;
+      u.reflY.value = WATER_Y;
+    }
     this.fx = new FX(this.scene, this.camera, $("#overlay"));
     this.ui = new UI(this);
     this.dialogue = new Dialogue(this);
@@ -179,6 +188,7 @@ class Game {
     const w = innerWidth, h = innerHeight;
     this.renderer.setSize(w, h, false);
     this.post?.setSize(w, h);
+    this.reflection?.setSize();
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -201,10 +211,18 @@ class Game {
       [new THREE.Vector3(-20, 0, 120), "thornwisp", 2, 12], [new THREE.Vector3(-20, 0, 120), "pineling", 2, 10],
     ];
     this.spawnGroups = groups;
-    for (const [c, kind, n, r] of groups) for (let i = 0; i < n; i++) {
+    for (const [c, kind, n, r] of groups) for (let i = 0; i < n; i++) this.spawnNear(kind, c, r);
+  }
+
+  /** Spawn around a group's centre, on dry land. */
+  spawnNear(kind, c, r) {
+    let x, z;
+    for (let k = 0; k < 20; k++) {
       const a = Math.random() * 6.28, d = 4 + Math.random() * r;
-      this.spawnEnemy(kind, c.x + Math.cos(a) * d, c.z + Math.sin(a) * d, c);
+      x = c.x + Math.cos(a) * d; z = c.z + Math.sin(a) * d;
+      if (this.world.waterAt(x, z) < terrainHeight(x, z)) break;
     }
+    return this.spawnEnemy(kind, x, z, c);
   }
 
   respawnTick(dt) {
@@ -215,8 +233,7 @@ class Game {
     for (const [c, kind, n, r] of this.spawnGroups) {
       const alive = this.enemies.filter((e) => e.kind === kind && e.home.distanceTo(c) < 1).length;
       if (alive < n && c.distanceTo(this.active.pos) > 50) {
-        const a = Math.random() * 6.28, d = 4 + Math.random() * r;
-        this.spawnEnemy(kind, c.x + Math.cos(a) * d, c.z + Math.sin(a) * d, c);
+        this.spawnNear(kind, c, r);
       }
     }
   }
@@ -286,7 +303,7 @@ class Game {
     this.ui.toast("Everyone fainted… back to the cottage for a cup of cocoa.");
     setTimeout(() => {
       const v = PLACES.village;
-      for (const h of this.party.members) if (h.joined) { h.fainted = false; h.anim.sleep = false; h.hp = h.maxHp; h.setPos(v.x + 6 + Math.random() * 3, v.z - 6 + Math.random() * 3); }
+      for (const h of this.party.members) if (h.joined) { h.fainted = false; h.anim.sleep = false; h.hp = h.maxHp; h.invuln = 2; h.setPos(v.x + 6 + Math.random() * 3, v.z - 6 + Math.random() * 3); }
       this.active = this.party.members.find((m) => m.joined);
       this.ui.buildMoves();
       this.combat?.clear();
@@ -439,6 +456,15 @@ class Game {
         // (Always on the first frames, so the shadow map exists before anything samples it.)
         if (this.shadowFrame < 4 || this.shadowFrame % 2 === 0) this.renderer.shadowMap.needsUpdate = true;
         this.gpuBegin();
+        // Count every pass's draws in renderer.info for the frame (reflection and post passes included).
+        this.renderer.info.autoReset = false;
+        this.renderer.info.reset();
+        if (this.reflection) {
+          // Mirror pass for the pond and stream, only while some water is near and on screen.
+          this.camera.updateMatrixWorld();
+          const on = this.world.waterInView(this.camera) && this.reflection.render(this.scene, this.camera, WATER_Y);
+          this.world.waterUniforms.reflOn.value = on ? 1 : 0;
+        }
         if (this.post) this.post.render(real); else this.renderer.render(this.scene, this.camera);
         this.gpuEnd();
       }
@@ -613,6 +639,11 @@ class Game {
         if (m.pos.clone().add(new THREE.Vector3(0, 0.9, 0)).distanceTo(p.pos) < m.radius + p.radius) { const r = m.takeDamage(p.damage, p.pos, { projectile: p }); return r === "reflected" ? null : m; }
       }
     }
+    if (p.pos.y < this.world.waterAt(p.pos.x, p.pos.z)) {
+      this.world.addRipple(p.pos.x, p.pos.z, 1.2);
+      this.fx.burst(p.pos.clone(), "puff", 8, { color: "#e4f4ff", up: 3.5, speed: 1.6, life: 0.6, size: 0.25 });
+      return "ground";
+    }
     if (p.pos.y < this.world.groundAt(p.pos.x, p.pos.z) - 0.2) return "ground";
     return null;
   }
@@ -644,7 +675,7 @@ class Game {
     this.camDist = 0.85 * (this.camDist || dist) + 0.15 * dist;
     if (dist < this.camDist) this.camDist = dist;
     const pos = this.cam.target.clone().addScaledVector(dir, this.camDist);
-    const gmin = terrainHeight(pos.x, pos.z) + 0.6;
+    const gmin = Math.max(terrainHeight(pos.x, pos.z), this.world.waterAt(pos.x, pos.z)) + 0.6;
     if (pos.y < gmin) pos.y = gmin;
     // Cinematic look during some dialogue lines: stand behind the hero and look at the subject.
     if (this.camFocus) {

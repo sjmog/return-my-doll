@@ -1,5 +1,5 @@
 // Music (crossfaded by mood) and sound effects, all generated with ElevenLabs for this game.
-const SFX = ["jump", "land", "swing", "hit", "verse", "bolt", "heal", "blink", "flap", "breath", "tailspin", "roar", "bark",
+const SFX = ["jump", "land", "splash", "wade", "swing", "hit", "verse", "bolt", "heal", "blink", "flap", "breath", "tailspin", "roar", "bark",
   "pine_hop", "pine_hurt", "pine_die", "pickup", "levelup", "hurt", "doll", "button", "boss_roar", "boss_slam", "needles",
   "talk", "quest", "fetch_throw", "portal"];
 const MUSIC = ["title", "day", "night", "battle", "boss", "victory"];

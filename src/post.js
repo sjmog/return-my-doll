@@ -233,10 +233,6 @@ export class Post {
 
   render(dt) {
     this.grade(dt);
-    // Count every pass's draws in renderer.info for the frame (it would otherwise show only the last pass).
-    const info = this.game.renderer.info;
-    info.autoReset = false;
-    info.reset();
-    this.composer.render(dt);
+    this.composer.render(dt); // (renderer.info is reset once per frame by the game loop)
   }
 }

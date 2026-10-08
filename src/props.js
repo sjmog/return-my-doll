@@ -375,7 +375,7 @@ export class Props {
 
   // --- a watermill on the stream, its wheel turning ------------------------------------------------------
   buildWatermill() {
-    const a = STREAM[4], b = STREAM[5];
+    const a = STREAM[5], b = STREAM[6];
     const dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz);
     const tx = dx / l, tz = dz / l, nx = -tz, nz = tx; // along the stream, and across it (north bank side)
     const cx = a[0] + tx * 10 + nx * 6.5, cz = a[1] + tz * 10 + nz * 6.5;

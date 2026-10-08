@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { spawn, sizeOf, rimLight, mergedGeometry, material } from "./assets.js";
 import { Puppet } from "./puppet.js";
 import { Props } from "./props.js";
+import { pondMaterial, streamMaterial, waterUniforms, MAX_RIPPLES } from "./water.js";
 
 export const WORLD_R = 270; // walkable radius
 const NO_COLLIDERS = [];
@@ -41,7 +42,7 @@ export const PATHS = [
   [[-62, 36], [-82, 0], [-76, -34]],                        // village -> pond, west
   [[0, -8], [4, -60], [2, -110], [-20, -150], [-38, -165]], // south, over the stream to the viewpoint
 ];
-export const STREAM = [[-52, -80], [-36, -100], [-12, -112], [20, -110], [48, -100], [80, -112], [120, -130], [175, -152], [235, -178], [320, -210]];
+export const STREAM = [[-58, -70], [-52, -80], [-36, -100], [-12, -112], [20, -110], [48, -100], [80, -112], [120, -130], [175, -152], [235, -178], [320, -210]];
 
 function segDist(x, z, ax, az, bx, bz) {
   const dx = bx - ax, dz = bz - az, l = dx * dx + dz * dz;
@@ -59,6 +60,33 @@ export function pathDist(x, z) {
   return d;
 }
 export function streamDist(x, z) { return polyDist(x, z, STREAM); }
+// The ground mesh: a grid of GROUND_SEG cells sampling terrainHeight at its corners.
+const GROUND_SIZE = 700, GROUND_SEG = 220, GROUND_STEP = GROUND_SIZE / GROUND_SEG;
+/** Height of the drawn ground mesh at (x, z): terrainHeight interpolated over the same triangles. */
+export function meshHeight(x, z) {
+  const gx = (x + GROUND_SIZE / 2) / GROUND_STEP, gz = (z + GROUND_SIZE / 2) / GROUND_STEP;
+  const ix = Math.floor(gx), iz = Math.floor(gz), fx = gx - ix, fz = gz - iz;
+  const at = (i, k) => terrainHeight(i * GROUND_STEP - GROUND_SIZE / 2, k * GROUND_STEP - GROUND_SIZE / 2);
+  const hb = at(ix, iz + 1), hd = at(ix + 1, iz);
+  // PlaneGeometry splits each cell along the b-d diagonal.
+  if (fx + fz <= 1) { const ha = at(ix, iz); return ha + (hd - ha) * fx + (hb - ha) * fz; }
+  const hc = at(ix + 1, iz + 1);
+  return hc + (hb - hc) * (1 - fx) + (hd - hc) * (1 - fz);
+}
+/** Height of the water surface at (x, z) (pond or stream), or -Infinity where there's none. */
+export function waterLevel(x, z) {
+  if (dist2(x, z, PLACES.pond) < 34) return WATER_Y;
+  if (polyDist(x, z, STREAM) > 4.5) return -Infinity;
+  // Stream: the surface sits 0.7 m above the channel bed at the nearest point of its centre line.
+  let best = Infinity, bx = 0, bz = 0;
+  for (let i = 1; i < STREAM.length; i++) {
+    const [ax, az] = STREAM[i - 1], [cx, cz] = STREAM[i], dx = cx - ax, dz = cz - az, l = dx * dx + dz * dz;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / l));
+    const d = Math.hypot(x - ax - t * dx, z - az - t * dz);
+    if (d < best) { best = d; bx = ax + t * dx; bz = az + t * dz; }
+  }
+  return Math.max(WATER_Y, terrainHeight(bx, bz) + 0.7);
+}
 /** 0..1: how much of a flower meadow this spot is. */
 export function meadow(x, z) { return Math.max(0, Math.min(1, (vnoise(x / 46 + 3.3, z / 46 - 7.1) - 0.6) / 0.14)); }
 
@@ -77,6 +105,8 @@ function findBridge() {
   return { x: best.x, z: best.z, dx: best.dir[0] / l, dz: best.dir[1] / l };
 }
 
+export const WATER_Y = -1.6;
+
 export function terrainHeight(x, z) {
   let h = 5 * vnoise(x / 70, z / 70) + 2.2 * vnoise(x / 28 + 9, z / 28 - 4) + 0.6 * vnoise(x / 9, z / 9);
   h -= 3.5;
@@ -91,10 +121,15 @@ export function terrainHeight(x, z) {
     const f = 1 - sm(rad * 0.6, rad, dist2(x, z, p));
     h = h * (1 - f) + 0.3 * f;
   }
-  // Pond basin with an island.
-  const dp = dist2(x, z, PLACES.pond);
-  h -= 4.2 * (1 - sm(14, 26, dp));
-  h += 3.6 * (1 - sm(3, 7.5, dp));
+  // Lily Pond: a bowl about 2.5 m deep with a wandering shoreline, a sandy shelf and an island.
+  const dr = dist2(x, z, PLACES.pond);
+  if (dr < 34) {
+    const dp = dr + (vnoise(x * 0.11 + 3, z * 0.11 - 5) - 0.5) * 8 * sm(8, 16, dr);
+    let p = WATER_Y - 2.7 + 0.7 * vnoise(x * 0.3, z * 0.3) + sm(11, 21, dp) * 3.5;
+    p = Math.max(p, WATER_Y + 1.6 - sm(3.5, 7.5, dr) * 4.4);
+    const f = sm(33, 23, dp);
+    h = h * (1 - f) + p * f;
+  }
   // The stream's channel, cut through everything else.
   const sd = polyDist(x, z, STREAM);
   if (sd < 7) h -= 2.3 * (1 - sm(1.6, 5.5, sd));
@@ -104,7 +139,6 @@ export function terrainHeight(x, z) {
   return h;
 }
 export const BRIDGE = findBridge();
-export const WATER_Y = -1.6;
 
 // --- painted canvas textures -------------------------------------------------------------------
 function canvasTex(w, h, draw, repeat = null) {
@@ -277,6 +311,7 @@ export class World {
         }`,
     });
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16), this.skyMat);
+    this.sky.layers.set(1); // water reflects the sky from its own shader instead
     this.scene.add(this.sky);
     const cts = [cloudTexture(3), cloudTexture(11), cloudTexture(29)];
     this.clouds = [];
@@ -284,6 +319,7 @@ export class World {
       const high = i >= 24;
       const m = new THREE.SpriteMaterial({ map: cts[i % 3], transparent: true, opacity: high ? 0.45 : 0.9, depthWrite: false, fog: false });
       const s = new THREE.Sprite(m);
+      s.layers.set(1); // big overlapping quads: too costly for the mirror, which has the shader's sky
       const a = Math.random() * Math.PI * 2, r = 240 + Math.random() * 380;
       s.position.set(Math.cos(a) * r, (high ? 130 : 60) + Math.random() * 60, Math.sin(a) * r);
       s.scale.set((high ? 220 : 130) + Math.random() * 100, (high ? 40 : 60) + Math.random() * 30, 1);
@@ -315,7 +351,7 @@ export class World {
   }
 
   buildTerrain() {
-    const size = 700, seg = 220;
+    const size = GROUND_SIZE, seg = GROUND_SEG;
     const geo = new THREE.PlaneGeometry(size, size, seg, seg);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
@@ -367,120 +403,112 @@ export class World {
 
   buildWater() {
     this.streamPts = STREAM;
-    this.waterUniforms = {
-      time: { value: 0 }, zenith: { value: new THREE.Color("#9fcdec") }, horizon: { value: new THREE.Color("#fbead2") },
-      deep: { value: new THREE.Color("#7fb3cf") }, shallow: { value: new THREE.Color("#c3e4e4") }, night: { value: 0 },
-    };
-    const common = `
-      uniform float time, night; uniform vec3 zenith, horizon, deep, shallow;
-      varying vec3 vW; varying vec2 vUv;
-      float hsh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-        return mix(mix(hsh(i), hsh(i+vec2(1,0)), f.x), mix(hsh(i+vec2(0,1)), hsh(i+vec2(1,1)), f.x), f.y); }
-      vec3 ripple(vec2 p, vec2 flow){
-        float a = vn(p * 0.9 + flow * time) , b = vn(p * 2.1 - flow.yx * time * 1.3);
-        return normalize(vec3((a - 0.5) * 0.6 + (b - 0.5) * 0.35, 1.0, (vn(p * 1.3 + 7.0 + flow * time) - 0.5) * 0.6));
-      }
-      vec3 paintWater(vec3 n, float shoreT, float depthT){
-        vec3 V = normalize(cameraPosition - vW);
-        float fres = pow(1.0 - max(dot(V, n), 0.0), 3.0);
-        vec3 R = reflect(-V, n);
-        vec3 sky = mix(horizon, zenith, smoothstep(0.0, 0.6, R.y));
-        vec3 body = mix(shallow, deep, depthT);
-        vec3 c = mix(body, sky, 0.25 + 0.55 * fres);
-        float glint = pow(max(dot(R, normalize(vec3(0.4, 0.7, 0.3))), 0.0), 60.0) * (1.0 - night);
-        c += glint * 0.6;
-        // Soft foam where the water meets the bank, broken up like dry-brush.
-        float foam = smoothstep(0.0, 1.0, shoreT) * smoothstep(0.35, 0.75, vn(vW.xz * 1.6 + time * 0.3));
-        c = mix(c, vec3(1.0), foam * 0.55);
-        return c * mix(1.0, 0.45, night);
-      }`;
-    const vert = `varying vec3 vW; varying vec2 vUv;
-      #include <fog_pars_vertex>
-      void main(){ vUv = uv; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
-        vec4 mvPosition = viewMatrix * w; gl_Position = projectionMatrix * mvPosition;
-        #include <fog_vertex>
-      }`;
-    this.waterMat = new THREE.ShaderMaterial({
-      transparent: true, fog: true, uniforms: { ...THREE.UniformsLib.fog, ...this.waterUniforms },
-      vertexShader: vert,
-      fragmentShader: common + `
-        #include <fog_pars_fragment>
-        void main(){
-          float r = length(vUv - 0.5) * 2.0;           // 0 centre .. 1 shore
-          vec3 n = ripple(vW.xz * 0.6, vec2(0.05, 0.03));
-          vec3 c = paintWater(n, smoothstep(0.8, 0.98, r), 1.0 - smoothstep(0.25, 0.9, r));
-          float a = 0.9 * (1.0 - smoothstep(0.93, 1.0, r));
-          gl_FragColor = vec4(c, a);
-          #include <fog_fragment>
-        }`,
-    });
-    const w = new THREE.Mesh(new THREE.CircleGeometry(28, 64), this.waterMat);
-    w.rotation.x = -Math.PI / 2;
-    w.position.set(PLACES.pond.x, WATER_Y, PLACES.pond.z);
-    this.scene.add(w);
-    // The stream: a ribbon following the channel, flowing away from the pond.
-    const L = [], pts = [];
-    const S = STREAM;
-    for (let i = 1; i < S.length; i++) {
-      const a = S[i - 1], b = S[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    this.waterUniforms = waterUniforms();
+    this.ripples = this.waterUniforms.ripples.value;
+    this.rippleNext = 0;
+    // The pond: a fine grid over the basin carrying the water depth, so colour, clarity and the
+    // shoreline follow the real bed. Triangles that are all well above the water are dropped.
+    const P = PLACES.pond, half = 34, step = 0.5, n = Math.round(half * 2 / step) + 1;
+    const pos = [], depth = [], uv = [], idx = [];
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const x = P.x - half + i * step, z = P.z - half + j * step;
+      pos.push(x, WATER_Y, z);
+      depth.push(WATER_Y - meshHeight(x, z));
+      uv.push(i / (n - 1), j / (n - 1));
+    }
+    for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+      const k = j * n + i, q = [k, k + 1, k + n, k + n + 1];
+      if (Math.max(...q.map((v) => depth[v])) < -0.05) continue;
+      idx.push(k, k + n, k + 1, k + 1, k + n, k + n + 1);
+    }
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    pg.setAttribute("depth", new THREE.Float32BufferAttribute(depth, 1));
+    pg.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    pg.setIndex(idx);
+    pg.computeBoundingSphere();
+    this.pond = new THREE.Mesh(pg, pondMaterial(this.waterUniforms));
+    this.pond.layers.set(1);
+    this.scene.add(this.pond);
+    // The stream: a ribbon five vertices across following the channel, wide enough to meet its banks.
+    const pts = [];
+    for (let i = 1; i < STREAM.length; i++) {
+      const a = STREAM[i - 1], b = STREAM[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
       const steps = Math.ceil(len / 2);
       for (let k = 0; k < steps; k++) pts.push([a[0] + (b[0] - a[0]) * k / steps, a[1] + (b[1] - a[1]) * k / steps]);
     }
-    pts.push(S[S.length - 1]);
-    const pos = [], uv = [], idx = [];
+    pts.push(STREAM[STREAM.length - 1]);
+    const COLS = 5, HW = 3.6;
+    const spos = [], sdepth = [], suv = [], sflow = [], sidx = [];
+    this.streamSamples = [];
     let along = 0;
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i], q = pts[Math.min(pts.length - 1, i + 1)], o = pts[Math.max(0, i - 1)];
       const dx = q[0] - o[0], dz = q[1] - o[1], l = Math.hypot(dx, dz) || 1;
-      const nx = -dz / l, nz = dx / l, hw = 2.6;
+      const nx = -dz / l, nz = dx / l;
       if (i) along += Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]);
       const y = Math.max(WATER_Y, terrainHeight(p[0], p[1]) + 0.7);
-      pos.push(p[0] + nx * hw, y, p[1] + nz * hw, p[0] - nx * hw, y, p[1] - nz * hw);
-      uv.push(0, along, 1, along);
-      if (i) { const k = i * 2; idx.push(k - 2, k - 1, k, k - 1, k + 1, k); }
-    }
-    const sg = new THREE.BufferGeometry();
-    sg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    sg.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
-    sg.setIndex(idx);
-    this.streamMat = new THREE.ShaderMaterial({
-      transparent: true, fog: true, uniforms: { ...THREE.UniformsLib.fog, ...this.waterUniforms },
-      vertexShader: vert,
-      fragmentShader: common + `
-        #include <fog_pars_fragment>
-        void main(){
-          float edge = abs(vUv.x - 0.5) * 2.0;
-          vec2 flowUv = vec2(vUv.x * 3.0, vUv.y * 0.35 - time * 0.9);
-          vec3 n = ripple(flowUv * 2.0, vec2(0.0, 0.0));
-          vec3 c = paintWater(n, smoothstep(0.6, 0.95, edge), 0.5 - edge * 0.5);
-          float streak = smoothstep(0.62, 0.95, vn(vec2(vUv.x * 9.0, vUv.y * 0.6 - time * 1.4)));
-          c = mix(c, vec3(1.0), streak * 0.25);
-          gl_FragColor = vec4(c, 0.85 * (1.0 - smoothstep(0.85, 1.0, edge)));
-          #include <fog_fragment>
-        }`,
-    });
-    const stream = new THREE.Mesh(sg, this.streamMat);
-    stream.renderOrder = 1;
-    this.scene.add(stream);
-    this.animated.push((dt, t) => { this.waterUniforms.time.value = t; });
-    // Lily pads, some with a flower.
-    const padMat = new THREE.MeshLambertMaterial({ color: "#8fc38a", emissive: new THREE.Color(0.12, 0.16, 0.1) });
-    const flowerMat = new THREE.MeshLambertMaterial({ color: "#ffd1e2", emissive: new THREE.Color(0.35, 0.25, 0.3) });
-    for (let i = 0; i < 22; i++) {
-      const a = Math.random() * 7, r = 9 + Math.random() * 15;
-      const pad = new THREE.Mesh(new THREE.CircleGeometry(0.8 + Math.random() * 0.7, 14, 0.3, 5.8), padMat);
-      pad.rotation.x = -Math.PI / 2;
-      pad.rotation.z = Math.random() * 6;
-      pad.position.set(PLACES.pond.x + Math.cos(a) * r, WATER_Y + 0.03, PLACES.pond.z + Math.sin(a) * r);
-      this.scene.add(pad);
-      if (i % 3 === 0) {
-        const f = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.25, 7, 1, true), flowerMat);
-        f.position.copy(pad.position).add(new THREE.Vector3(0.1, 0.12, 0));
-        f.rotation.x = Math.PI;
-        this.scene.add(f);
+      if (i % 4 === 0) this.streamSamples.push(new THREE.Vector3(p[0], y, p[1]));
+      for (let c = 0; c < COLS; c++) {
+        const u = c / (COLS - 1), off = (u - 0.5) * 2 * HW, x = p[0] + nx * off, z = p[1] + nz * off;
+        spos.push(x, y, z);
+        sdepth.push(y - meshHeight(x, z));
+        suv.push(u, along);
+        sflow.push(dx / l, dz / l);
+      }
+      if (i) for (let c = 0; c < COLS - 1; c++) {
+        const k = i * COLS + c, pk = k - COLS;
+        sidx.push(pk, pk + 1, k, pk + 1, k + 1, k);
       }
     }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute("position", new THREE.Float32BufferAttribute(spos, 3));
+    sg.setAttribute("depth", new THREE.Float32BufferAttribute(sdepth, 1));
+    sg.setAttribute("uv", new THREE.Float32BufferAttribute(suv, 2));
+    sg.setAttribute("flow", new THREE.Float32BufferAttribute(sflow, 2));
+    sg.setIndex(sidx);
+    this.stream = new THREE.Mesh(sg, streamMaterial(this.waterUniforms));
+    this.stream.layers.set(1);
+    this.stream.renderOrder = 1;
+    this.scene.add(this.stream);
+    this.animated.push((dt, t) => { this.waterUniforms.time.value = t; });
+    // Lily pads float where the water is deep enough, some with a flower (two instanced draws).
+    const pads = [];
+    for (let tries = 0; pads.length < 26 && tries < 400; tries++) {
+      const a = Math.random() * 6.28, r = 8 + Math.random() * 14;
+      const x = P.x + Math.cos(a) * r, z = P.z + Math.sin(a) * r;
+      if (WATER_Y - terrainHeight(x, z) > 0.4) pads.push([x, z, 0.8 + Math.random() * 0.7, Math.random() * 6.28]);
+    }
+    const padMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 14, 0.3, 5.8).rotateX(-Math.PI / 2),
+      new THREE.MeshLambertMaterial({ color: "#8fc38a", emissive: new THREE.Color(0.12, 0.16, 0.1) }), pads.length);
+    const flowers = pads.filter((_, i) => i % 3 === 0);
+    const flowerMesh = new THREE.InstancedMesh(new THREE.ConeGeometry(0.22, 0.25, 7, 1, true).rotateX(Math.PI),
+      new THREE.MeshLambertMaterial({ color: "#ffd1e2", emissive: new THREE.Color(0.35, 0.25, 0.3) }), flowers.length);
+    const m = new THREE.Matrix4(), qn = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    pads.forEach(([x, z, sc, rot], i) => padMesh.setMatrixAt(i, m.compose(new THREE.Vector3(x, WATER_Y + 0.03, z), qn.setFromAxisAngle(up, rot), new THREE.Vector3(sc, 1, sc))));
+    flowers.forEach(([x, z], i) => flowerMesh.setMatrixAt(i, m.makeTranslation(x + 0.1, WATER_Y + 0.15, z)));
+    for (const mesh of [padMesh, flowerMesh]) { mesh.layers.set(1); mesh.computeBoundingSphere(); this.scene.add(mesh); }
+  }
+
+  /** Surface height of water at (x, z), or -Infinity. */
+  waterAt(x, z) { return waterLevel(x, z); }
+
+  /** A ring spreading across the water from (x, z). */
+  addRipple(x, z, strength = 1) {
+    this.ripples[this.rippleNext].set(x, z, this.waterUniforms.time.value, strength);
+    this.rippleNext = (this.rippleNext + 1) % MAX_RIPPLES;
+  }
+
+  /** Is any water near enough and on screen to be worth a reflection pass? */
+  waterInView(camera) {
+    const f = this.viewFrustum || (this.viewFrustum = new THREE.Frustum());
+    f.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const s = this.viewSphere || (this.viewSphere = new THREE.Sphere());
+    const cp = camera.position;
+    // Beyond these distances the water is a sliver and the sky-only reflection reads the same.
+    if (cp.distanceTo(PLACES.pond) < 160 && f.intersectsSphere(s.set(new THREE.Vector3(PLACES.pond.x, WATER_Y, PLACES.pond.z), 22))) return true;
+    for (const p of this.streamSamples) if (p.distanceToSquared(cp) < 70 * 70 && f.intersectsSphere(s.set(p, 5))) return true;
+    return false;
   }
 
   /**
@@ -648,6 +676,7 @@ export class World {
     };
     const N = this.low ? 2500 : 26000;
     this.grass = new THREE.InstancedMesh(merged, mat, N);
+    this.grass.layers.set(1); // too fine to matter in reflections, and the biggest draw
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), col = new THREE.Color();
     const greens = ["#8fc27a", "#a3cf86", "#86bb76", "#b4d690", "#9ac981", "#7fb771", "#c2dc98"];
     let n = 0, tries = 0;
@@ -673,12 +702,25 @@ export class World {
   }
 
   buildFireflies() {
-    const N = 160;
+    // Swarms that live in fixed spots (wet and sheltered places), so you can walk through them.
+    const swarms = [
+      [PLACES.pond.x, PLACES.pond.z, 14, 50],
+      [-36, -100, 10, 22], [20, -110, 10, 22], [80, -112, 10, 18], // along the stream
+      [PLACES.oak.x, PLACES.oak.z, 9, 26],
+      [PLACES.village.x - 14, PLACES.village.z - 12, 9, 18],
+      [PLACES.woods.x - 10, PLACES.woods.z + 12, 12, 26],
+    ];
+    const N = swarms.reduce((n, sw) => n + sw[3], 0);
     const geo = new THREE.BufferGeometry();
-    const pos = new Float32Array(N * 3);
-    this.ffSeed = [];
-    for (let i = 0; i < N; i++) this.ffSeed.push([Math.random() * 60 - 30, Math.random() * 3 + 0.5, Math.random() * 60 - 30, Math.random() * 10]);
-    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    this.ffHome = [];
+    for (const [cx, cz, r, n] of swarms) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
+        const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
+        this.ffHome.push([x, Math.max(WATER_Y, terrainHeight(x, z)) + 0.5 + Math.random() * 2.5, z, Math.random() * 10]);
+      }
+    }
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(N * 3), 3));
     this.fireflies = new THREE.Points(geo, new THREE.PointsMaterial({
       size: 0.35, map: blobTexture("255,236,150"), color: new THREE.Color(2.6, 2.3, 1.2), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0,
     }));
@@ -842,14 +884,16 @@ export class World {
       c.material.opacity = 0.85 - night * 0.6;
     }
     this.sky.position.copy(focus);
-    // Fireflies around the player at dusk and night.
-    const ff = this.fireflies.geometry.attributes.position;
-    for (let i = 0; i < this.ffSeed.length; i++) {
-      const [x, y, z, s] = this.ffSeed[i];
-      const fx = focus.x + x + Math.sin(t * 0.3 + s) * 2, fz = focus.z + z + Math.cos(t * 0.27 + s) * 2;
-      ff.setXYZ(i, fx, terrainHeight(fx, fz) + y + Math.sin(t * 0.9 + s) * 0.4, fz);
+    // Fireflies drift around their homes at dusk and night.
+    this.fireflies.visible = night > 0.01;
+    if (this.fireflies.visible) {
+      const ff = this.fireflies.geometry.attributes.position;
+      for (let i = 0; i < this.ffHome.length; i++) {
+        const [x, y, z, s] = this.ffHome[i];
+        ff.setXYZ(i, x + Math.sin(t * 0.3 + s) * 1.5, y + Math.sin(t * 0.9 + s) * 0.4, z + Math.cos(t * 0.27 + s) * 1.5);
+      }
+      ff.needsUpdate = true;
     }
-    ff.needsUpdate = true;
     this.fireflies.material.opacity = night * (0.7 + 0.3 * Math.sin(t * 3));
     for (const f of this.animated) f(dt, t);
     this.cloudTime.value.set(t * 0.0021, t * 0.0013);
@@ -867,6 +911,8 @@ export class World {
     this.waterUniforms.zenith.value.copy(k.zenith);
     this.waterUniforms.horizon.value.copy(k.horizon);
     this.waterUniforms.night.value = night;
+    this.waterUniforms.sunDir.value.copy(dir);
+    this.waterUniforms.sunCol.value.copy(k.sun);
     if (this.sunGlow) {
       this.sunGlow.position.copy(this.sunPuppet.position).addScaledVector(dir, 5);
       this.sunGlow.visible = this.sunPuppet.visible;

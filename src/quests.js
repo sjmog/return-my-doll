@@ -73,7 +73,7 @@ export class Quests {
     ];
     for (const [x, z, extra] of starSpots) {
       const st = glowOrb("#ffe27a", 0.45);
-      const y = (extra === 0.2 ? w.capTop : w.groundAt(x, z)) + 1.2 + (extra > 1 ? extra : 0);
+      const y = (extra === 0.2 ? w.capTop : Math.max(w.groundAt(x, z), w.waterAt(x, z))) + 1.2 + (extra > 1 ? extra : 0);
       st.position.set(x, y, z);
       s.add(st);
       this.stars.push({ obj: st, pos: st.position.clone(), got: false });
