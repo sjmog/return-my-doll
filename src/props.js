@@ -633,11 +633,13 @@ export class Props {
       }
     }
     this.birds.instanceMatrix.needsUpdate = true;
-    // Pollen drifts in the sunlight around the player.
+    // Pollen drifts in the sunlight. Each mote has a fixed place in a 40 m pattern tiled across the
+    // world (so you walk through it); only the tile nearest the player is drawn, wrapping at 20 m.
     const pp = this.pollen.geometry.attributes.position, S = this.pollenSeed;
+    const wrap = (v, c) => c + ((((v - c + 20) % 40) + 40) % 40) - 20;
     for (let i = 0; i < pp.count; i++) {
-      const x = focus.x + (S[i * 4] - 0.5) * 40 + Math.sin(t * 0.21 + S[i * 4 + 3] * 30) * 2.5;
-      const z = focus.z + (S[i * 4 + 1] - 0.5) * 40 + Math.cos(t * 0.17 + S[i * 4 + 3] * 20) * 2.5;
+      const x = wrap(S[i * 4] * 40, focus.x) + Math.sin(t * 0.21 + S[i * 4 + 3] * 30) * 2.5;
+      const z = wrap(S[i * 4 + 1] * 40, focus.z) + Math.cos(t * 0.17 + S[i * 4 + 3] * 20) * 2.5;
       const y = terrainHeight(x, z) + 0.4 + ((S[i * 4 + 2] * 4 + t * 0.15 * (0.5 + S[i * 4 + 3])) % 4);
       pp.setXYZ(i, x, y, z);
     }
