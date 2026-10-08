@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Return My Doll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/" } }
+</script>
+<style>
+  :root {
+    --ink: #3b3049; --ink-soft: #77697f; --paper: #fbf6ec; --card: rgba(255, 252, 245, .9); --line: #e7dccb;
+    --rose: #eaa8ad; --rose-deep: #b85d6b; --sage: #b3d1ab; --sky: #b4d3ec; --lilac: #cdbbe3; --butter: #f4dc9a;
+    --display: "IM Fell English", Georgia, serif; --ui: Nunito, ui-rounded, system-ui, sans-serif;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #e9efd2; color: var(--ink); font: 15px/1.4 var(--ui); }
+  canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* Paper grain and a soft vignette over the 3D view, like a painted page. */
+  #paper { position: fixed; inset: 0; pointer-events: none; mix-blend-mode: multiply; opacity: .55;
+    background-image: radial-gradient(ellipse at center, transparent 55%, rgba(80, 60, 70, .28) 100%), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .55 0 0 0 0 .5 0 0 0 0 .42 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E"); }
+  body.post #paper { opacity: .14; } /* the watercolour pass paints its own paper */
+  #overlay { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .dmg { position: absolute; left: 0; top: 0; font: 900 22px var(--ui); text-shadow: 0 2px 0 rgba(59, 48, 73, .55), 0 0 6px rgba(59, 48, 73, .35); white-space: nowrap; }
+  .bubble { position: absolute; left: 0; top: 0; background: #fffdf8; color: var(--ink); border-radius: 16px; padding: 8px 14px; font: italic 18px var(--display);
+    box-shadow: 0 6px 16px -8px rgba(59, 48, 73, .5); max-width: 280px; text-align: center; }
+  .bubble::after { content: ""; position: absolute; left: 50%; bottom: -8px; margin-left: -8px; border: 8px solid transparent; border-top-color: #fffdf8; border-bottom: 0; }
+
+  /* Screens */
+  .screen { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 20; }
+  .screen[hidden] { display: none; }
+  #loading { background: var(--paper); }
+  #loading .box { text-align: center; width: min(420px, 90vw); }
+  #loading h1 { font: 400 44px var(--display); margin: 0 0 12px; }
+  .bar { height: 10px; background: #efe5d3; border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--sky), var(--lilac), var(--rose)); transition: width .3s; }
+  #title { background: radial-gradient(ellipse at 50% 40%, rgba(251, 246, 236, .55), rgba(251, 246, 236, .92) 70%); }
+  #title .box { text-align: center; max-width: 760px; }
+  #title .kicker { font: italic 20px var(--display); color: var(--ink-soft); margin: 0; }
+  #title h1 { font: 400 clamp(46px, 9vw, 96px)/1 var(--display); margin: 6px 0 10px; letter-spacing: .5px; }
+  #title h1 em { color: var(--rose-deep); }
+  #title .cast { display: flex; justify-content: center; gap: 6px; margin: 18px 0 8px; flex-wrap: wrap; }
+  #title .cast figure { margin: 0; width: 120px; }
+  #title .cast img { width: 110px; height: 110px; object-fit: contain; filter: drop-shadow(0 8px 10px rgba(59, 48, 73, .25)); }
+  #title .cast figcaption { font: 700 13px var(--ui); color: var(--ink-soft); }
+  #title .cast .locked img { filter: grayscale(.6) opacity(.55) drop-shadow(0 8px 10px rgba(59, 48, 73, .2)); }
+  .btn { border: 0; border-radius: 16px; padding: 14px 34px; font: 900 20px var(--ui); background: var(--ink); color: #fff; cursor: pointer; box-shadow: 0 10px 24px -12px rgba(59, 48, 73, .7); transition: transform .1s, filter .15s; }
+  .btn:hover { filter: brightness(1.1); } .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: #fffdf8; color: var(--ink); border: 1.5px solid var(--line); box-shadow: none; font-size: 16px; padding: 10px 18px; }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 18px; text-align: left; margin: 22px auto 0; max-width: 640px; font-size: 14px; color: var(--ink-soft); }
+  .controls b { color: var(--ink); display: inline-block; min-width: 64px; }
+  kbd { font: 800 12px var(--ui); background: #fff; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; color: var(--ink); }
+  .touch-note { display: none; margin: 14px auto 0; max-width: 420px; padding: 10px 14px; border-radius: 14px; background: #fff6dc; border: 1.5px solid #f0d68a; font-weight: 800; color: var(--ink); }
+  @media (hover: none) and (pointer: coarse) { .touch-note { display: block; } }
+  #pause, #ending { background: rgba(251, 246, 236, .82); backdrop-filter: blur(4px); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 26px 30px; box-shadow: 0 20px 50px -24px rgba(59, 48, 73, .5); text-align: center; max-width: 640px; }
+  .card h2 { font: 400 40px var(--display); margin: 0 0 6px; }
+  #ending .card p { font: italic 20px var(--display); color: var(--ink-soft); }
+  #fade { position: fixed; inset: 0; background: #2a2236; opacity: 0; pointer-events: none; transition: opacity .6s; z-index: 15; }
+  #fade.on { opacity: 1; }
+
+  /* HUD */
+  #hud[hidden] { display: none; }
+  #hud > * { position: fixed; z-index: 5; }
+  #party { top: 14px; left: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .member { position: relative; display: grid; grid-template-columns: 50px 1fr; grid-template-rows: auto 8px; column-gap: 8px; align-items: center; width: 190px;
+    background: var(--card); border: 1.5px solid var(--line); border-radius: 16px; padding: 5px 10px 7px 5px; font: 800 14px var(--ui); color: var(--ink); cursor: pointer; text-align: left;
+    box-shadow: 0 6px 16px -10px rgba(59, 48, 73, .5); transition: transform .15s, border-color .15s; pointer-events: auto; }
+  .member img { grid-row: 1 / 3; width: 50px; height: 50px; object-fit: contain; background: #f6efe2; border-radius: 12px; }
+  .member .key { position: absolute; left: -6px; top: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); border: 1.5px solid var(--line); font-size: 11px; display: grid; place-items: center; }
+  .member .hp { height: 8px; background: #f0e3df; border-radius: 99px; overflow: hidden; align-self: start; }
+  .member .hp i { display: block; height: 100%; background: linear-gradient(90deg, #f19aa7, #f7c08b); transition: width .25s; }
+  .member.active { border-color: var(--ink); transform: translateX(6px); box-shadow: 0 0 0 2px var(--ink), 0 8px 18px -10px rgba(59, 48, 73, .6); }
+  .member.fainted { opacity: .55; filter: grayscale(.8); }
+  #status { top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; background: var(--card); border: 1.5px solid var(--line); border-radius: 99px; padding: 6px 16px; font-weight: 800; box-shadow: 0 6px 16px -10px rgba(59, 48, 73, .5); }
+  #xp { width: 150px; height: 8px; background: #efe5d3; border-radius: 99px; overflow: hidden; }
+  #xp i { display: block; height: 100%; background: linear-gradient(90deg, var(--sky), var(--lilac)); transition: width .3s; }
+  #acorns { color: var(--ink-soft); font-size: 13px; }
+  #quest { top: 14px; right: 14px; width: 270px; background: var(--card); border: 1.5px solid var(--line); border-radius: 18px; padding: 12px 16px; box-shadow: 0 6px 16px -10px rgba(59, 48, 73, .5); }
+  #quest h3 { margin: 0 0 4px; font: 400 22px var(--display); }
+  #quest p { margin: 3px 0; font-size: 14px; color: var(--ink); }
+  #quest p.done { color: var(--ink-soft); text-decoration: line-through; }
+  #quest h4 { margin: 10px 0 2px; font: 800 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: #9a78c9; }
+  #quest p.side { font-size: 13px; color: #6d5a8a; }
+  #quest p.side.done { text-decoration: none; color: var(--ink-soft); }
+  #minimap { right: 14px; bottom: 14px; width: 190px; height: 190px; border-radius: 50%; box-shadow: 0 8px 22px -10px rgba(59, 48, 73, .6); background: #e9efd2; transition: all .25s; }
+  #minimap.big { width: min(78vh, 78vw); height: min(78vh, 78vw); right: 50%; bottom: 50%; transform: translate(50%, 50%); }
+  #moves { bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; }
+  .move { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1.5px solid var(--line); border-radius: 16px; padding: 6px 12px 6px 6px; box-shadow: 0 6px 16px -10px rgba(59, 48, 73, .5); }
+  .move .ic { position: relative; width: 42px; height: 42px; display: grid; place-items: center; font-size: 22px; background: #f6efe2; border-radius: 12px; }
+  .move svg { position: absolute; inset: 3px; transform: rotate(-90deg); width: 36px; height: 36px; }
+  .move circle { fill: none; stroke: var(--ink); stroke-width: 3; stroke-dasharray: 100.5; stroke-dashoffset: 100.5; opacity: 0; }
+  .move.cooling circle { opacity: .55; }
+  .move.cooling .ic { filter: grayscale(.7); opacity: .7; }
+  .move .mt { display: flex; flex-direction: column; line-height: 1.15; }
+  .move b { font-size: 13px; } .move span { font-size: 11px; color: var(--ink-soft); font-weight: 700; }
+  #prompt { bottom: 96px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; border-radius: 99px; padding: 8px 16px; font-weight: 800; }
+  #prompt[hidden] { display: none; }
+  #prompt kbd { background: #fff; color: var(--ink); margin-right: 6px; }
+  #compass { left: 0; top: 0; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+  #compass[hidden] { display: none; }
+  #compass span { width: 0; height: 0; border-left: 11px solid transparent; border-right: 11px solid transparent; border-top: 18px solid #f7c948; filter: drop-shadow(0 2px 2px rgba(59, 48, 73, .5)); }
+  #compass b { font: 900 12px var(--ui); color: #fff; text-shadow: 0 1px 3px rgba(59, 48, 73, .9); }
+  #hud.bossfight #toasts { top: 132px; }
+  #toasts { top: 70px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+  .toast { background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 8px 16px; font-weight: 800; box-shadow: 0 8px 18px -10px rgba(59, 48, 73, .5); transition: opacity .5s, transform .5s; }
+  .toast.quest { background: #fff6dc; border-color: #f0d68a; }
+  .toast.level { background: #efe6ff; border-color: var(--lilac); }
+  .toast.out { opacity: 0; transform: translateY(-8px); }
+  #bossbar { top: 64px; left: 50%; transform: translateX(-50%); width: min(560px, 70vw); text-align: center; font: 400 22px var(--display); color: #fff; text-shadow: 0 2px 4px rgba(30, 20, 40, .6); }
+  #bossbar[hidden] { display: none; }
+  #bossbar .bar { height: 14px; border: 2px solid rgba(255, 255, 255, .8); background: rgba(40, 30, 50, .5); }
+  #bossbar .bar i { background: linear-gradient(90deg, #6fae63, #a9d58a); width: 100%; }
+  #hud.talking #moves, #hud.talking #prompt { display: none; }
+  #dialogue { bottom: 24px; left: 50%; transform: translateX(-50%); width: min(820px, calc(100vw - 32px)); display: grid; grid-template-columns: 96px 1fr; gap: 16px; align-items: center;
+    background: #fffcf5; border: 1.5px solid var(--line); border-radius: 22px; padding: 14px 20px 14px 14px; box-shadow: 0 18px 40px -20px rgba(59, 48, 73, .7); cursor: pointer; z-index: 8; }
+  #dialogue[hidden] { display: none; }
+  #dialogue img { width: 96px; height: 96px; object-fit: contain; background: #f6efe2; border-radius: 16px; }
+  #dialogue .who { font: 800 14px var(--ui); color: var(--rose-deep); letter-spacing: .04em; text-transform: uppercase; }
+  #dialogue .text { font: 400 23px/1.35 var(--display); min-height: 62px; }
+  #dialogue .more { font-size: 12px; color: var(--ink-soft); font-weight: 700; text-align: right; }
+  /* Choices (side tales) */
+  #dialogue.choosing { cursor: default; }
+  #dialogue.choosing .more { display: none; }
+  #dialogue.choosing .text { font-size: 20px; min-height: 0; margin-bottom: 8px; }
+  #dialogue .choices { display: grid; gap: 6px; }
+  #dialogue .choices[hidden] { display: none; }
+  #dialogue .choices button { display: flex; gap: 10px; align-items: center; text-align: left; border: 1.5px solid var(--line); background: #fffdf8; border-radius: 12px;
+    padding: 8px 12px; font: 400 18px/1.3 var(--display); color: var(--ink); cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
+  #dialogue .choices button kbd { flex: none; }
+  #dialogue .choices button.sel { background: #fff3d6; border-color: #e8c565; transform: translateX(4px); }
+  #dialogue .ctimer { height: 6px; background: #efe5d3; border-radius: 99px; overflow: hidden; margin-bottom: 8px; }
+  #dialogue .ctimer[hidden] { display: none; }
+  #dialogue .ctimer i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #f19aa7, #f7c08b); }
+  #activity { top: 64px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; background: var(--card); border: 1.5px solid var(--line);
+    border-radius: 99px; padding: 6px 18px; font-weight: 800; box-shadow: 0 6px 16px -10px rgba(59, 48, 73, .5); }
+  #activity[hidden] { display: none; }
+  #activity b { font: 400 20px var(--display); }
+  #activity em { color: var(--rose-deep); font-style: normal; }
+  .act-meter { position: absolute; left: 0; top: 0; background: #fffdf8; border-radius: 12px; padding: 4px 10px; text-align: center; font: 800 12px var(--ui);
+    color: var(--ink-soft); box-shadow: 0 6px 14px -8px rgba(59, 48, 73, .5); }
+  .act-meter span { display: block; font-size: 18px; color: #e77d93; letter-spacing: 2px; }
+  .act-meter span i { color: #e7dccb; font-style: normal; }
+  .act-giggle { position: absolute; left: 0; top: 0; font: italic 26px var(--display); color: #e86f9a; text-shadow: 0 2px 0 #fff, 0 0 8px #fff; animation: giggle .5s ease-in-out infinite alternate; }
+  @keyframes giggle { from { margin-top: 0; } to { margin-top: -8px; } }
+  #dialogue.narrator .text { font-style: italic; }
+  #help { bottom: 90px; right: 220px; background: var(--card); border: 1.5px solid var(--line); border-radius: 18px; padding: 12px 16px; font-size: 13px; width: 260px; }
+  #help[hidden] { display: none; }
+  #help p { margin: 3px 0; }
+  .err { color: var(--rose-deep); font-weight: 800; }
+  @media (max-width: 900px) {
+    #quest { width: 200px; } .move .mt { display: none; } #minimap { width: 130px; height: 130px; } .member { width: 150px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="paper"></div>
+<div id="overlay"></div>
+<div id="fade"></div>
+
+<div id="loading" class="screen"><div class="box">
+  <h1>Return My Doll</h1>
+  <div class="bar" id="loadbar"><i></i></div>
+  <p style="color:var(--ink-soft)">Unpacking the puppets and their paint…</p>
+</div></div>
+
+<div id="title" class="screen" hidden><div class="box">
+  <p class="kicker">a watercolour adventure</p>
+  <h1>Return My <em>Doll</em></h1>
+  <p style="font:italic 20px var(--display);color:var(--ink-soft);margin:0">Someone has stolen Dolly and carried her to the top of the Great Mushroom Tree.</p>
+  <div class="cast">
+    <figure><img src="thumbs/boy.png" alt=""><figcaption>The Boy</figcaption></figure>
+    <figure><img src="thumbs/girl.png" alt=""><figcaption>The Girl</figcaption></figure>
+    <figure class="locked"><img src="thumbs/dragon.png" alt=""><figcaption>???</figcaption></figure>
+    <figure class="locked"><img src="thumbs/girl.png" alt="" style="transform:scale(.6)"><figcaption>Dolly</figcaption></figure>
+  </div>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+    <button class="btn" id="continue" hidden>Continue</button>
+    <button class="btn" id="start">Begin the adventure</button>
+  </div>
+  <p class="touch-note">Return My Doll is played with a keyboard and mouse. Open this page on a computer to play.</p>
+  <div class="controls">
+    <div><kbd>W A S D</kbd> move</div><div><kbd>Mouse</kbd> look (click to lock)</div><div><kbd>Space</kbd> jump · fly</div>
+    <div><kbd>Click</kbd> / <kbd>J</kbd> attack</div><div><kbd>Right-click</kbd> / <kbd>K</kbd> special</div><div><kbd>Shift</kbd> dodge · dash</div>
+    <div><kbd>E</kbd> talk · use</div><div><kbd>1–4</kbd> / <kbd>Tab</kbd> switch hero</div><div><kbd>Q</kbd> eat acorn · <kbd>M</kbd> map</div>
+  </div>
+</div></div>
+
+<div id="pause" class="screen" hidden><div class="card">
+  <h2>Paused</h2>
+  <p style="color:var(--ink-soft)">Click the world to look around with the mouse. Esc pauses.</p>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:12px">
+    <button class="btn" id="resume">Resume</button>
+    <button class="btn ghost" id="mute">🔊 Sound on</button>
+    <button class="btn ghost" id="fpsbtn">🎞 60 fps (cool &amp; quiet)</button>
+  </div>
+</div></div>
+
+<div id="ending" class="screen" hidden><div class="card">
+  <h2>The End…?</h2>
+  <p>Dolly is home, Biscuit has someone to throw sticks, and even the Great Pine is learning to be kind.</p>
+  <p style="font-size:16px">The world is yours to explore. Ten golden stars are hidden out there.</p>
+</div></div>
+
+<div id="hud" hidden>
+  <div id="party"></div>
+  <div id="status"><span id="level">Lv 1</span><div id="xp"><i></i></div><span id="acorns"></span></div>
+  <div id="quest"></div>
+  <div id="toasts"></div>
+  <div id="bossbar" hidden>The Great Pine<div class="bar"><i></i></div></div>
+  <div id="moves"></div>
+  <div id="prompt" hidden><kbd>E</kbd><span></span></div>
+  <div id="compass" hidden><span></span><b></b></div>
+  <canvas id="minimap" width="380" height="380"></canvas>
+  <div id="help" hidden>
+    <p><kbd>WASD</kbd> move · <kbd>Alt</kbd> walk</p><p><kbd>Space</kbd> jump / flap (hold to glide) · <kbd>C</kbd> dive</p>
+    <p><kbd>Click</kbd> attack · <kbd>Right-click</kbd> special · <kbd>Shift</kbd> dodge</p>
+    <p><kbd>E</kbd> talk / use · <kbd>Q</kbd> acorn · <kbd>M</kbd> map · <kbd>Esc</kbd> pause</p>
+  </div>
+  <div id="dialogue" hidden><img alt=""><div><div class="ctimer" hidden><i></i></div><div class="who"></div><div class="text"></div><div class="choices" hidden></div><div class="more">Space / click ▸</div></div></div>
+  <div id="activity" hidden></div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
